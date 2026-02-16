@@ -36,6 +36,8 @@ The platform orchestrates tools across multiple VMs:
 | **OpenClaw** | AI agent gateway, dashboard, and messaging (WhatsApp, etc.) | :18789 | https://172.16.192.94:18790/?token=\<gateway-token\> (self-signed cert) |
 | **Mem0** | Shared memory layer — persistent context across all agents (API + MCP) | :8765 | https://172.16.192.94:8766 (password protected) |
 | **Mem0 Dashboard** | Browse and manage shared agent memories (also proxies API) | :3004 | https://172.16.192.94:3005 (password protected) |
+| **Firecrawl** | Self-hosted web scraping/crawling API — converts URLs to LLM-ready markdown | :3006 | https://172.16.192.94:3007 (password protected) |
+| **SearXNG** | Meta search engine — gives AI agents real-time web search | :55510 | https://172.16.192.94:55511 (password protected) |
 
 ### AI CLI Tools (VM 1)
 | CLI | Description | Auth |
@@ -43,6 +45,7 @@ The platform orchestrates tools across multiple VMs:
 | **Claude Code** | Anthropic's AI coding agent | Claude Pro account |
 | **Gemini CLI** | Google's AI coding agent | Google account |
 | **Codex CLI** | OpenAI's AI coding agent | OpenAI account |
+| **Kimi CLI** | Moonshot's AI coding agent (Kimi K2.5) | Kimi/Moonshot account |
 
 ### VM 2 — Kimi (IP TBD)
 | Service | Description | Port |
@@ -124,6 +127,12 @@ VM_ai_agent_suit_platform/
 │  └────────────────────┘  │
 │  ┌────────────────────┐  │
 │  │ Mem0 UI      :3005 │  │
+│  └────────────────────┘  │
+│  ┌────────────────────┐  │
+│  │ Firecrawl   :3007 │  │
+│  └────────────────────┘  │
+│  ┌────────────────────┐  │
+│  │ SearXNG    :55511 │  │
 │  └────────────────────┘  │
 │  ┌────────────────────┐  │
 │  │ Caddy (HTTPS+auth) │  │

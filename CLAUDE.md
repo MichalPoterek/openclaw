@@ -26,8 +26,11 @@ The core philosophy is **maximum results with minimum effort** - leveraging AI a
 | **OpenClaw** | AI agent gateway + dashboard + WhatsApp | :18789 | `https://172.16.192.94:18790/?token=<gateway-token>` | systemd user: `openclaw-gateway.service` |
 | **Mem0** | Shared memory layer (API + MCP) | :8765 | `https://172.16.192.94:8766` (basic auth: mike) | systemd system: `mem0.service` (Docker Compose) |
 | **Mem0 Dashboard** | Memory browser/manager UI | :3004 | `https://172.16.192.94:3005` (basic auth: mike) — also proxies `/api/*` and `/mcp/*` to Mem0 API | part of `mem0.service` |
+| **Firecrawl** | Web scraping/crawling API (self-hosted) | :3006 | `https://172.16.192.94:3007` (basic auth: mike) | systemd system: `firecrawl.service` (Docker Compose) |
+| **Firecrawl MCP** | MCP HTTP server for Firecrawl | :3008 | `http://localhost:3008/mcp` (internal) | systemd user: `firecrawl-mcp.service` |
+| **SearXNG** | Meta search engine for AI agents | :55510 | `https://172.16.192.94:55511` (basic auth: mike) | systemd system: `searxng.service` (Docker Compose) |
 | **Qdrant** | Vector database for Mem0 | :6333 (internal) | not exposed externally | part of `mem0.service` |
-| **Caddy** | HTTPS reverse proxy with basic auth | :5001/:5680/:3001/:3003/:18790/:8766/:3005 | proxies to all backend services; `:3005` handles both UI and API routing | systemd system: `caddy.service` |
+| **Caddy** | HTTPS reverse proxy with basic auth | :5001/:5680/:3001/:3003/:18790/:8766/:3005/:55511/:3007 | proxies to all backend services; `:3005` handles both UI and API routing | systemd system: `caddy.service` |
 
 ### AI CLI Tools (VM 1)
 | CLI | Version | Auth | Command |
@@ -35,6 +38,7 @@ The core philosophy is **maximum results with minimum effort** - leveraging AI a
 | **Claude Code** | 2.1.42 | Claude Pro account (claude.ai) | `claude` |
 | **Gemini CLI** | 0.28.2 | Google account | `gemini` |
 | **Codex CLI** | 0.101.0 | OpenAI account | `codex` |
+| **Kimi CLI** | 1.12.0 | Kimi/Moonshot account | `kimi` |
 
 ### VM 2 — Kimi (IP TBD)
 | Service | Purpose | Port |
@@ -71,7 +75,23 @@ sudo systemctl restart mem0
 # Mem0 Docker logs:
 docker compose -f /home/mike/mem0/openmemory/docker-compose.yml logs -f
 
-# Caddy HTTPS proxy (system service) — proxies :5001→:5000, :5680→:5678, :3001→:3000, :3003→:3002, :18790→:18789, :8766→:8765, :3005→:3004
+# SearXNG (system service, Docker Compose)
+sudo systemctl status searxng
+sudo systemctl restart searxng
+# SearXNG Docker logs:
+docker compose -f /home/mike/searxng/docker-compose.yml logs -f
+
+# Firecrawl (system service, Docker Compose)
+sudo systemctl status firecrawl
+sudo systemctl restart firecrawl
+# Firecrawl Docker logs:
+docker compose -f /home/mike/firecrawl/docker-compose.yaml logs -f
+
+# Firecrawl MCP HTTP server (user service)
+systemctl --user status firecrawl-mcp
+systemctl --user restart firecrawl-mcp
+
+# Caddy HTTPS proxy (system service) — proxies :5001→:5000, :5680→:5678, :3001→:3000, :3003→:3002, :18790→:18789, :8766→:8765, :3005→:3004, :55511→:55510, :3007→:3006
 sudo systemctl status caddy
 sudo systemctl restart caddy
 ```
@@ -101,6 +121,45 @@ sudo systemctl restart caddy
 
 MCP SSE URL pattern: `http://localhost:8765/mcp/{client_name}/sse/mike`
 REST API: `http://localhost:8765/api/v1/memories/`
+
+## Firecrawl Configuration
+- **Image:** Self-built from `github.com/mendableai/firecrawl` (Docker Compose)
+- **Data:** `/home/mike/firecrawl/` (repo + config)
+- **Internal API:** `http://localhost:3006/v1/scrape` (no auth needed, `USE_DB_AUTHENTICATION=false`)
+- **External:** `https://172.16.192.94:3007` (Caddy HTTPS + basic auth)
+- **MCP HTTP:** `http://localhost:3008/mcp` (firecrawl-mcp HTTP Streamable server)
+- **SearXNG integration:** `SEARXNG_ENDPOINT=http://host.docker.internal:55510` in `.env`
+- **Containers:** api, playwright-service, redis, rabbitmq, nuq-postgres
+
+### Firecrawl API Endpoints
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/v1/scrape` | POST | Single URL → markdown/HTML/screenshot |
+| `/v1/crawl` | POST | Crawl entire site (async) |
+| `/v1/crawl/{id}` | GET | Check crawl status |
+| `/v1/map` | POST | Discover all URLs on a site |
+| `/v1/batch/scrape` | POST | Parallel multi-URL scrape |
+| `/v1/search` | POST | Web search + scrape results (uses SearXNG) |
+
+### Firecrawl Agent Integrations
+| Agent | Method | Status |
+|-------|--------|--------|
+| **Claude Code** | MCP stdio (`firecrawl-mcp` in `.claude.json`) | Connected |
+| **Gemini CLI** | MCP stdio (`~/.gemini/settings.json`) | Connected |
+| **Codex CLI** | MCP HTTP (`http://localhost:3008/mcp` in config.toml) | Connected |
+| **Goose** | MCP stdio (extension in config.yaml) | Connected |
+| **OpenCode** | MCP HTTP (`http://localhost:3008/mcp` in opencode.json) | Connected |
+| **Agent Zero** | Custom tools: `firecrawl_scrape`, `firecrawl_search` (+ prompt) | Wired |
+| **OpenClaw** | REST API via TOOLS.md instructions | Wired |
+| **n8n** | HTTP Request nodes to `http://localhost:3006/v1/scrape` | Ready |
+
+## SearXNG Configuration
+- **Image:** `searxng/searxng:latest` (Docker)
+- **Data:** `/home/mike/searxng/` (docker-compose.yml + settings.yml)
+- **Internal API:** `http://localhost:55510/search?q=...&format=json` (GET or POST)
+- **External:** `https://172.16.192.94:55511` (Caddy HTTPS + basic auth)
+- **Agent Zero integration:** Built-in via `search_engine.py` tool — calls `http://localhost:55510/search` (no config needed)
+- **Other agents:** Query `http://localhost:55510/search?q=QUERY&format=json` via HTTP Request
 
 ## VM Connections
 Credentials are stored in `.env` (never committed to git). See `.env.example` for the template.
