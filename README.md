@@ -35,7 +35,7 @@ The platform orchestrates tools across multiple VMs:
 | **OpenCode** | AI-powered coding assistant (headless API + web UI) | :3002 | https://172.16.192.94:3003 (password protected) |
 | **OpenClaw** | AI agent gateway, dashboard, and messaging (WhatsApp, etc.) | :18789 | https://172.16.192.94:18790/?token=\<gateway-token\> (self-signed cert) |
 | **Mem0** | Shared memory layer — persistent context across all agents (API + MCP) | :8765 | https://172.16.192.94:8766 (password protected) |
-| **Mem0 Dashboard** | Browse and manage shared agent memories | :3004 | https://172.16.192.94:3005 (password protected) |
+| **Mem0 Dashboard** | Browse and manage shared agent memories (also proxies API) | :3004 | https://172.16.192.94:3005 (password protected) |
 
 ### AI CLI Tools (VM 1)
 | CLI | Description | Auth |

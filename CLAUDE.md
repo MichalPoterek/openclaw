@@ -1,4 +1,4 @@
-pl# CLAUDE.md
+# CLAUDE.md
 
 ## Project Overview
 VM AI Agent Suite Platform - A comprehensive AI agent orchestration platform that coordinates multiple AI agents to assist with:
@@ -25,9 +25,9 @@ The core philosophy is **maximum results with minimum effort** - leveraging AI a
 | **OpenCode** | AI coding assistant (headless API + web) | :3002 | `https://172.16.192.94:3003` (basic auth: mike) | systemd user: `opencode-serve.service` |
 | **OpenClaw** | AI agent gateway + dashboard + WhatsApp | :18789 | `https://172.16.192.94:18790/?token=<gateway-token>` | systemd user: `openclaw-gateway.service` |
 | **Mem0** | Shared memory layer (API + MCP) | :8765 | `https://172.16.192.94:8766` (basic auth: mike) | systemd system: `mem0.service` (Docker Compose) |
-| **Mem0 Dashboard** | Memory browser/manager UI | :3004 | `https://172.16.192.94:3005` (basic auth: mike) | part of `mem0.service` |
+| **Mem0 Dashboard** | Memory browser/manager UI | :3004 | `https://172.16.192.94:3005` (basic auth: mike) — also proxies `/api/*` and `/mcp/*` to Mem0 API | part of `mem0.service` |
 | **Qdrant** | Vector database for Mem0 | :6333 (internal) | not exposed externally | part of `mem0.service` |
-| **Caddy** | HTTPS reverse proxy with basic auth | :5001/:5680/:3001/:3003/:18790/:8766/:3005 | proxies to all backend services | systemd system: `caddy.service` |
+| **Caddy** | HTTPS reverse proxy with basic auth | :5001/:5680/:3001/:3003/:18790/:8766/:3005 | proxies to all backend services; `:3005` handles both UI and API routing | systemd system: `caddy.service` |
 
 ### AI CLI Tools (VM 1)
 | CLI | Version | Auth | Command |
@@ -81,8 +81,11 @@ sudo systemctl restart caddy
 - **Embedder:** Google (`models/gemini-embedding-001`, 768 dims)
 - **Vector Store:** Qdrant (internal, port 6333)
 - **Data:** `/home/mike/mem0/openmemory/` (repo + config), Docker volumes for Qdrant storage
+- **Dashboard API URL:** `NEXT_PUBLIC_API_URL=https://172.16.192.94:3005` (set in `mem0.service`, runtime-injected via `entrypoint.sh`)
+- **Caddy `:3005`:** Routes `/api/*` and `/mcp/*` to `localhost:8765` (API), everything else to `localhost:3004` (UI)
 - **Config API:** `https://172.16.192.94:8766/api/v1/config/` — change LLM/embedder providers at runtime
 - **API Docs:** `https://172.16.192.94:8766/docs`
+- **Memory API field:** Use `app` (not `app_id`) when creating memories via REST API
 
 ### Mem0 Agent Integrations
 | Agent | Method | Status |
@@ -136,3 +139,4 @@ VM_ai_agent_suit_platform/
 - When designing features, prioritize simplicity and automation
 - Consider all three pillars: programming productivity, daily life quality, and wealth generation
 - Favor solutions that require minimal ongoing maintenance
+- Never include Co-Authored-By lines in git commits
