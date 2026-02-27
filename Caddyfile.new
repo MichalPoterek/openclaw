@@ -1,0 +1,117 @@
+:18790 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        reverse_proxy localhost:18789 {
+                header_up X-Forwarded-Proto https
+        }
+}
+
+:3003 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        reverse_proxy localhost:3002 {
+                header_up X-Forwarded-Proto https
+        }
+}
+
+:3001 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        reverse_proxy localhost:3000 {
+                header_up X-Forwarded-Proto https
+        }
+}
+
+:5001 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        reverse_proxy localhost:5000 {
+                header_up X-Forwarded-Proto https
+        }
+}
+
+:5680 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        reverse_proxy localhost:5678 {
+                header_up X-Forwarded-Proto https
+        }
+}
+
+:8766 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        reverse_proxy localhost:8765 {
+                header_up X-Forwarded-Proto https
+        }
+}
+
+:3005 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        handle /api/* {
+                reverse_proxy localhost:8765 {
+                        header_up X-Forwarded-Proto https
+                }
+        }
+        handle /mcp/* {
+                reverse_proxy localhost:8765 {
+                        header_up X-Forwarded-Proto https
+                }
+        }
+        handle {
+                reverse_proxy localhost:3004 {
+                        header_up X-Forwarded-Proto https
+                }
+        }
+}
+
+:55511 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        reverse_proxy localhost:55510 {
+                header_up X-Forwarded-Proto https
+        }
+}
+
+:3007 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        reverse_proxy localhost:3006 {
+                header_up X-Forwarded-Proto https
+        }
+}
+
+:5495 {
+        tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+        basicauth {
+                mike $2a$14$xGRq/xABjNygI1we6q6gJ..koiVpTd7bh8g9t5LqOlxsvRBFX6iqq
+        }
+        rewrite * {uri}?token=kimi-web-2026&{query}
+        reverse_proxy localhost:5494 {
+                header_up Authorization "Bearer kimi-web-2026"
+                header_up X-Forwarded-Proto https
+                transport http {
+                        read_timeout 300s
+                        write_timeout 300s
+                }
+        }
+}

@@ -1,145 +1,93 @@
 # VM AI Agent Suite Platform
 
-A comprehensive AI agent orchestration platform that coordinates multiple AI agents to help with programming, automation, daily life optimization, and wealth generation - all with maximum efficiency and minimum effort.
+A highly available, multi-agent orchestration platform running on dedicated infrastructure.
 
-## Vision
+## Architecture & Infrastructure
 
-This platform brings together multiple AI agent tools running across dedicated VMs to create a unified suite that assists across three key areas:
+### VM 1 — Main (172.16.192.94)
+- **OS:** Pop!_OS 24.04 (Linux)
+- **Access:** SSH `mike@172.16.192.94` (Pass: `mike7106`)
+- **Linger Mode:** Enabled (User services start on boot without active session)
 
-### Programming & Automation
-- Automated code generation, debugging, and refactoring
-- CI/CD pipeline management and DevOps automation
-- Multi-agent collaboration on complex development tasks
+### Core Components
 
-### Daily Life Optimization
-- Health tracking and wellness routine suggestions
-- Family life coordination and scheduling
-- Habit building and personal productivity
+#### 1. AI Frameworks
+- **Agent Zero:** Primary autonomous agent. Fixed for direct local file management (bypassing RFC).
+- **OpenClaw (Active Gateway):** Multi-channel active gateway. Serves as your AI assistant capable of auto-replying to WhatsApp messages. If logged out, run `/home/mike/.npm-global/bin/openclaw channels login` to scan a new QR code.
+- **Kimi K2.5:** Integrated via Web UI and CLI.
 
-### Wealth & Income Generation
-- Identifying high-efficiency income strategies
-- Financial task automation
-- Passive income workflow creation
-- Productivity maximization with minimal effort
+#### 2. WhatsApp Blackbox (The Passive Archive)
+A dedicated, passive logging system that silently captures all incoming/outgoing WhatsApp data in the background, completely separate from OpenClaw's active session.
+- **Database:** PostgreSQL with `pgvector` for future ML training.
+- **Storage:** `/home/mike/whatsapp-blackbox/media` (Isolated media archive).
+- **Integration:** OpenClaw has a dedicated skill (`whatsapp_blackbox`) to query this archive.
+- **Forcing History Sync:** To retroactively download years of past history, stop the service, clear the `/home/mike/whatsapp-blackbox/archiver/auth` folder, run `node whatsapp_archiver_force.js` interactively on the VM to get a QR code, scan it, and leave the app open on your primary phone.
 
-## AI Agent Stack
+#### 3. Shared Resources (MCP)
+- **Mem0:** Shared memory layer for cross-agent intelligence.
+- **Firecrawl:** Self-hosted web scraper (Playwright-based).
+- **SearXNG:** Meta-search engine for real-time web access.
 
-The platform orchestrates tools across multiple VMs:
+## Access & Security
 
-### VM 1 — Main (172.16.192.94, Pop!_OS 24.04)
-| Service | Description | Port | URL |
-|---------|-------------|------|-----|
-| **Agent Zero** | Autonomous general-purpose AI agent framework | :5000 | https://172.16.192.94:5001 (password protected) |
-| **n8n** | Workflow automation platform for connecting services and automating tasks | :5678 | https://172.16.192.94:5680 (password protected) |
-| **Goose** | AI coding agent by Block for automated dev workflows | :3000 | https://172.16.192.94:3001 (password protected) |
-| **OpenCode** | AI-powered coding assistant (headless API + web UI) | :3002 | https://172.16.192.94:3003 (password protected) |
-| **OpenClaw** | AI agent gateway, dashboard, and messaging (WhatsApp, etc.) | :18789 | https://172.16.192.94:18790/?token=\<gateway-token\> (self-signed cert) |
-| **Mem0** | Shared memory layer — persistent context across all agents (API + MCP) | :8765 | https://172.16.192.94:8766 (password protected) |
-| **Mem0 Dashboard** | Browse and manage shared agent memories (also proxies API) | :3004 | https://172.16.192.94:3005 (password protected) |
-| **Firecrawl** | Self-hosted web scraping/crawling API — converts URLs to LLM-ready markdown | :3006 | https://172.16.192.94:3007 (password protected) |
-| **SearXNG** | Meta search engine — gives AI agents real-time web search | :55510 | https://172.16.192.94:55511 (password protected) |
+### Unified Credentials
+- **User:** `mike`
+- **Password:** `mike7106`
+- **Authorized Admin Number:** `+48509879642`
 
-### AI CLI Tools (VM 1)
-| CLI | Description | Auth |
-|-----|-------------|------|
-| **Claude Code** | Anthropic's AI coding agent | Claude Pro account |
-| **Gemini CLI** | Google's AI coding agent | Google account |
-| **Codex CLI** | OpenAI's AI coding agent | OpenAI account |
-| **Kimi CLI** | Moonshot's AI coding agent (Kimi K2.5) | Kimi/Moonshot account |
+### Security Hardening
+- **Network:** All raw backend ports (DBs, APIs) bound to `127.0.0.1`.
+- **Proxy:** External access via **Caddy** with SSL and Basic Auth.
+- **Firewall:** `ufw-docker` enforced.
 
-### VM 2 — Kimi (IP TBD)
-| Service | Description | Port |
-|---------|-------------|------|
-| **Kimi K2.5** | Large language model for reasoning and code tasks | TBD |
+## Key Operational Paths
+- **Agent Zero UI:** `https://172.16.192.94:5001`
+- **WhatsApp Blackbox Root:** `/home/mike/whatsapp-blackbox`
+- **OpenClaw Workspace:** `/home/mike/.openclaw/workspace`
+- **Skill Definitions:** `.../workspace/skills/`
 
-## Getting Started
+## Troubleshooting
 
-### Prerequisites
-- Python 3.x
-- Access to the VM (Linux) with AI agents installed
-- SSH client
+### If Agent Zero "Files" tab fails:
+The system is patched to avoid RFC password errors. If it reoccurs, ensure `python/api/get_work_dir_files.py` uses direct `FileBrowser` calls and restart the service.
 
-### Setup
+### If Firecrawl Search fails:
+Restart the entire stack: `cd ~/firecrawl && docker compose restart && systemctl --user restart firecrawl-mcp`.
 
-1. Clone the repository
-2. Create and activate a virtual environment:
-   ```bash
-   python -m venv .venv
-   source .venv/Scripts/activate  # Windows (Git Bash)
-   # or
-   .venv\Scripts\activate         # Windows (CMD)
-   # or
-   source .venv/bin/activate      # macOS/Linux
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Configure VM connection (see `.env.example` for required variables)
+## Maintenance & Recovery
+The system relies on custom modifications that may be overwritten during software updates. Use the local patch scripts to restore functionality.
 
-### Running
+- **Location:** `./patches/` (Local Windows Directory)
+- **Agent Zero Patch:** Restores file browser access and RFC bypass.
+- **OpenClaw Patch:** Restores Blackbox logging and **Mem0 Auto-Sync**.
 
-```bash
-python main.py
-```
+### Active Agents Roster
+The system integrates 6 active AI agents:
+- **Service-Based Agents:**
+  - **Agent Zero:** Primary autonomous agent. Accessible via Web UI at `https://172.16.192.94:5001`.
+  - **OpenClaw:** Active gateway for WhatsApp interactions.
+- **CLI Agents:**
+  - **Kimi CLI (`kimi`):** Primary coding assistant with TUI (`kimi term`) and Web UI (`kimi web`).
+  - **Claude Code (`claude`):** Terminal-based engineering assistant (@anthropic-ai/claude-code).
+  - **OpenAI Codex (`codex`):** Terminal assistant for shell commands (@openai/codex).
+  - **Gemini CLI (`gemini`):** System management and development interface.
 
-## Project Structure
+### Boot Services (Linger Mode)
+Due to Linger Mode, the following 9 services start automatically after a VM reboot without requiring a user login:
+- **User Services (mike):** 
+  - `agent-zero.service`
+  - `openclaw-gateway.service`
+  - `whatsapp-archiver.service`
+  - `firecrawl-mcp.service`
+- **System Services (root):** 
+  - `n8n.service`
+  - `mem0.service`
+  - `firecrawl.service`
+  - `searxng.service`
+  - `caddy.service`
+- **Docker:** `whatsapp-postgres` database.
 
-```
-VM_ai_agent_suit_platform/
-├── main.py          # Application entry point
-├── .venv/           # Python virtual environment
-├── CLAUDE.md        # Claude Code configuration
-└── README.md        # This file
-```
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│           Windows Host (PyCharm)             │
-│        VM AI Agent Suite Platform            │
-│            (Orchestrator / main.py)          │
-└──────────┬───────────────────────┬───────────┘
-           │ SSH / API             │ SSH / API
-           ▼                       ▼
-┌──────────────────────────┐  ┌──────────────────┐
-│  VM 1 — Main             │  │  VM 2 — Kimi     │
-│  172.16.192.94           │  │  IP TBD          │
-│                          │  │                  │
-│  ┌────────────────────┐  │  │  ┌────────────┐  │
-│  │ Agent Zero  :5001  │  │  │  │  Kimi K2.5 │  │
-│  └────────────────────┘  │  │  └────────────┘  │
-│  ┌────────────────────┐  │  │                  │
-│  │ n8n          :5680 │  │  └──────────────────┘
-│  └────────────────────┘  │
-│  ┌────────────────────┐  │
-│  │ Goose        :3001 │  │
-│  └────────────────────┘  │
-│  ┌────────────────────┐  │
-│  │ OpenCode     :3003 │  │
-│  └────────────────────┘  │
-│  ┌────────────────────┐  │
-│  │ OpenClaw    :18790 │  │
-│  └────────────────────┘  │
-│  ┌────────────────────┐  │
-│  │ Mem0 API     :8766 │  │
-│  └────────────────────┘  │
-│  ┌────────────────────┐  │
-│  │ Mem0 UI      :3005 │  │
-│  └────────────────────┘  │
-│  ┌────────────────────┐  │
-│  │ Firecrawl   :3007 │  │
-│  └────────────────────┘  │
-│  ┌────────────────────┐  │
-│  │ SearXNG    :55511 │  │
-│  └────────────────────┘  │
-│  ┌────────────────────┐  │
-│  │ Caddy (HTTPS+auth) │  │
-│  └────────────────────┘  │
-└──────────────────────────┘
-```
-
-## License
-
-TBD
+## Project History & Evolution
+- **Feb 2026:** Implementation of WhatsApp Blackbox.
+- **Feb 2026:** Repair of Agent Zero file handling and RFC bypass.
+- **Feb 2026:** Unified 9 agents under a shared Mem0 memory layer.

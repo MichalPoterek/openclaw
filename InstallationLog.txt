@@ -1,0 +1,8 @@
+************************************* Invoked: Sat Feb 21 17:23:04 2026
+[0] Arguments: C:\Users\Mike\.gemini\tmp\msys2_install\msys2-x86_64-20240113.exe, install, --root, C:/msys64, --confirm-command, --accept-messages
+[4] Operations sanity check succeeded.
+[18] Using metadata cache from "C:/Users/Mike/AppData/Local/cache\\qt-installer-framework\\d75f1c19-3379-3717-ae8d-1404b51494a9"
+[18] Found 0 cached items.
+[21] Loaded control script ":/metadata/installer-config/control_js.js"
+[22] TargetDirectoryInUse : Error : The directory you selected already exists and contains an installation. Choose a different target for installation.
+[22] Answer: "Ok"
