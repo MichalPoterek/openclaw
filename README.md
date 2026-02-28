@@ -2,6 +2,18 @@
 
 A highly available, multi-agent orchestration platform running on dedicated infrastructure.
 
+## Repository & Source Control
+
+### Main Project Repository
+- **Location (Local):** `C:\Users\Mike\PycharmProjects\VM_ai_agent_suit_platform`
+- **Location (VM):** Not currently mirrored as a full repo, but key patches and scripts are transferred to `/home/mike/`.
+- **Tracking:** Initialized with Git to track system management scripts, AI provider restoration tools, and platform documentation.
+
+### OpenClaw Configuration Repository
+- **Location (VM):** `/home/mike/.openclaw`
+- **Tracking:** Git initialized to track `openclaw.json` and `models.json`.
+- **Latest State:** Configured for **Gemini 2.0 Flash** (as of Feb 28, 2026).
+
 ## Architecture & Infrastructure
 
 ### VM 1 — Main (172.16.192.94)
@@ -27,8 +39,24 @@ A dedicated, passive logging system that silently captures all incoming/outgoing
 - **Mem0:** Shared memory layer for cross-agent intelligence.
 - **Firecrawl:** Self-hosted web scraper (Playwright-based).
 - **SearXNG:** Meta-search engine for real-time web access.
+- **Gemini OAuth Bridge:** 
+  - **Location:** `/home/mike/gemini-bridge-oauth`
+  - **Service:** `gemini-bridge.service`
+  - **Port:** `3458`
+  - **Function:** An independent service that translates OpenAI-compatible API calls to Google Cloud OAuth 2.0. This allows any agent (OpenClaw, Agent Zero, etc.) to use the latest Gemini models without source code changes.
+  - **Connection Parameters (for any agent):**
+    - **Base URL:** `http://172.16.192.94:3458/v1`
+    - **API Key:** `gemini-oauth-bridge-key-12345`
+    - **Provider Type:** `openai-completions` (or OpenAI-compatible)
 
-## Access & Security
+### Security & Privacy Safeguards
+- **Configuration Template:** Use `openclaw.json.template` as a base for new installations to ensure all privacy rules are applied.
+- **Context Isolation:** `dmScope: per-channel-peer` ensures each WhatsApp user has an isolated session (no data leakage between contacts).
+- **Strict Send Policy:** Default `deny` policy with explicit `allow` only for authorized numbers (Mike: `+48509879642`).
+- **Owner-Only Commands:** Administrative actions restricted via `ownerAllowFrom`.
+- **System Filtering:** Gemini Bridge automatically removes technical logs (system status) from AI history to maintain clean conversational context.
+- **Group Protection:** `groupPolicy: allowlist` prevents the bot from listening to or responding in unauthorized group chats.
+- **Data Safety:** WhatsApp Blackbox is isolated from the main AI runtime to prevent prompt injection and unauthorized data access.
 
 ### Unified Credentials
 - **User:** `mike`

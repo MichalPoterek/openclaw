@@ -3,6 +3,11 @@
 ## Project Overview
 VM AI Agent Suite Platform - A comprehensive AI agent orchestration platform coordinating multiple agents for programming, automation, life optimization, and wealth generation.
 
+## Repository & Configuration Tracking
+- **Local Repo:** `C:\Users\Mike\PycharmProjects\VM_ai_agent_suit_platform` (Tracked via Git)
+- **OpenClaw VM Config:** `/home/mike/.openclaw` (Tracked via Git on VM)
+- **Current Model:** Gemini 2.0 Flash (Configured Feb 28, 2026)
+
 ## Tech Stack & Environment
 - **Host VM 1 (Main):** 172.16.192.94 (Pop!_OS 24.04)
 - **Host VM 2 (Kimi):** IP TBD
@@ -29,6 +34,7 @@ VM AI Agent Suite Platform - A comprehensive AI agent orchestration platform coo
 | **Mem0** | Shared Memory | SSE | :8765 | `https://172.16.192.94:8766` | **Auto-Sync:** OpenClaw automatically syncs session distillations. |
 | **Firecrawl** | Web Scraper | HTTP Stream | :3008 | `https://172.16.192.94:3007` | **Node.js** version restored for Kimi. Agent Zero uses `firecrawl_native.py`. |
 | **SearXNG** | Web Search | HTTP Stream | :8081 | `https://172.16.192.94:55511` | Rate limits unlocked. |
+| **Gemini Bridge**| OAuth Bridge | HTTP (OpenAI) | :3458 | `http://172.16.192.94:3458`| **Auth:** `x-api-key: gemini-oauth-bridge-key-12345` |
 
 ## WhatsApp Architecture (Dual Session)
 The system uses **two separate WhatsApp Web sessions** (both appearing as linked browsers on your phone):
@@ -82,12 +88,13 @@ Due to Linger Mode being enabled for the `mike` user, the following 9 systemd se
 ### 1. User-Level Services (Run as `mike`)
 ```bash
 # Check status of user services that start on boot
-systemctl --user status agent-zero openclaw-gateway whatsapp-archiver firecrawl-mcp
+systemctl --user status agent-zero openclaw-gateway whatsapp-archiver firecrawl-mcp gemini-bridge
 ```
 - `agent-zero.service` (Agent Zero Web UI)
 - `openclaw-gateway.service` (Active OpenClaw WhatsApp integration)
 - `whatsapp-archiver.service` (Passive WhatsApp Blackbox archiver)
 - `firecrawl-mcp.service` (Custom Node.js Firecrawl MCP server for Kimi)
+- `gemini-bridge.service` (OAuth 2.0 to OpenAI API translator at ~/gemini-bridge-oauth)
 
 ### 2. System-Level Services (Run as `root`)
 ```bash
@@ -115,6 +122,13 @@ In addition to the service-based agents (Agent Zero and OpenClaw), the suite int
 - **Claude Code (`claude`):** Official Anthropic AI agent for terminal-based engineering.
 - **OpenAI Codex (`codex`):** Terminal assistant translating natural language to shell commands.
 - **Gemini CLI (`gemini`):** Interactive system management and development interface.
+
+## Security & Privacy Safeguards
+- **Context Isolation:** `dmScope: per-channel-peer` ensures each user has a private session.
+- **Strict Send Policy:** Default `deny` policy; model responses only sent to authorized numbers (`+48509879642`).
+- **Owner-Only Commands:** Native commands limited to Mike's phone number.
+- **System Filtering:** Automated stripping of technical status logs from model history in Gemini Bridge.
+- **Group Protection:** Silent in groups by default (`allowlist` policy).
 
 ## Development Conventions
 - Use `.venv` for Python.

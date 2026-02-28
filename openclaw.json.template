@@ -1,0 +1,103 @@
+{
+  "ui": {
+    "assistant": {
+      "name": "PA"
+    }
+  },
+  "models": {
+    "providers": {
+      "gemini-bridge": {
+        "baseUrl": "http://172.16.192.94:3458/v1",
+        "apiKey": "gemini-oauth-bridge-key-12345",
+        "auth": "api-key",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "gemini-3.1-pro-preview",
+            "name": "Gemini 3.1 Pro (Bridge)",
+            "input": ["text", "image"],
+            "contextWindow": 2000000,
+            "maxTokens": 65536,
+            "reasoning": true
+          },
+          {
+            "id": "gemini-2.5-flash",
+            "name": "Gemini 2.5 Flash (Bridge)",
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "reasoning": true
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "gemini-bridge/gemini-3.1-pro-preview",
+        "fallbacks": ["gemini-bridge/gemini-2.5-flash"]
+      },
+      "workspace": "/home/mike/.openclaw/workspace",
+      "contextTokens": 150000,
+      "dmScope": "per-channel-peer"
+    }
+  },
+  "messages": {
+    "responsePrefix": "[PA] \u26a1 ",
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "ownerAllowFrom": [
+      48509879642
+    ]
+  },
+  "session": {
+    "dmScope": "per-channel-peer",
+    "sendPolicy": {
+      "default": "deny",
+      "rules": [
+        {
+          "action": "allow",
+          "match": {
+            "keyPrefix": "agent:main:whatsapp:direct:+48509879642"
+          }
+        },
+        {
+          "action": "allow",
+          "match": {
+            "keyPrefix": "agent:main:main"
+          }
+        }
+      ]
+    }
+  },
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "open",
+      "selfChatMode": true,
+      "allowFrom": ["*"],
+      "groupPolicy": "allowlist",
+      "accounts": {
+        "default": {}
+      }
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "lan",
+    "auth": {
+      "mode": "token",
+      "token": "YOUR_GATEWAY_TOKEN_HERE"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "whatsapp": {
+        "enabled": true
+      }
+    }
+  }
+}
