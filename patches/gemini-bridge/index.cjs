@@ -4,6 +4,7 @@ const cors = require("cors");
 const fs = require("fs");
 const crypto = require("crypto");
 const { OAuth2Client } = require("google-auth-library");
+const { Pool } = require("pg");
 
 const app = express();
 app.use(express.json({ limit: "100mb" }));
@@ -25,7 +26,22 @@ const LMSTUDIO_ENDPOINT = process.env.LMSTUDIO_ENDPOINT || "http://172.16.0.118:
 const LMSTUDIO_MODELS_ENDPOINT = process.env.LMSTUDIO_MODELS_ENDPOINT || "http://172.16.0.118:1234/v1/models";
 const LMSTUDIO_API_KEY = process.env.LMSTUDIO_API_KEY || "";
 const LMSTUDIO_TIMEOUT = 120000;
-const LMSTUDIO_COMPRESS_TIMEOUT = 15000;
+const LMSTUDIO_COMPRESS_TIMEOUT = 60000;
+
+// Intelligent context compression
+const COMPRESS_THRESHOLD = 300000;  // ~300K tokens — start compressing
+const COMPRESS_TARGET    = 150000;  // compress DOWN to ~150K tokens
+const COMPRESS_CACHE_MAX = 50;      // max cached compression sessions
+const COMPRESS_CACHE_TTL = 30 * 60 * 1000; // 30 min
+const COMPRESS_TIMEOUT   = 60000;   // 60s max for LM Studio compression call
+const COMPRESS_ESTIMATED_SPEED = 1000; // ~1K tokens/sec for LM Studio
+
+// pgvector (paired context snapshots)
+const PG_HOST = process.env.PG_HOST || "bridge-db";
+const PG_PORT = parseInt(process.env.PG_PORT || "5432");
+const PG_USER = process.env.PG_USER || "bridge";
+const PG_PASSWORD = process.env.PG_PASSWORD || "bridge7106";
+const PG_DATABASE = process.env.PG_DATABASE || "bridge_context";
 
 // Cache settings
 const CACHE_MAX_SIZE = 500;
@@ -58,15 +74,24 @@ function getGeminiHeaders(token, model) {
   };
 }
 
-// Single model chain — all models ordered by capability (strongest → weakest)
+// Model chains ordered by capability (strongest → weakest)
 // Each model has its OWN quota pool, so fallback cycles through fresh limits
-const MODEL_CHAIN = [
-  "gemini-3.1-pro-preview",
-  "gemini-2.5-pro",
-  "gemini-3-flash-preview",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
+const REASONING_CHAIN = [
+  "gemini-3.1-pro-preview",   // strongest reasoning
+  "gemini-3-flash-preview",   // strong, fast reasoning (3.x gen > 2.5 gen)
+  "gemini-2.5-pro",           // solid reasoning, older gen
+  "gemini-2.5-flash",         // adequate fallback
+  "gemini-2.5-flash-lite",    // last resort
 ];
+
+const SUBAGENT_CHAIN = [
+  "gemini-3-flash-preview",   // best sub-agent model (fast + smart)
+  "gemini-2.5-flash",         // fast fallback
+  "gemini-2.5-flash-lite",    // lightest fallback
+];
+
+// Unified chain for health endpoint display
+const MODEL_CHAIN = REASONING_CHAIN;
 
 // Thinking config per model generation
 const DEFAULT_THINKING_BUDGET = 8192;
@@ -83,27 +108,27 @@ function getThinkingConfig(model, thinking) {
   return { includeThoughts: true };
 }
 
-// Three routing modes — same chain, different thinking:
-//   1. "pro" models           → thinking ON  (main agents)
-//   2. "flash/lite" models    → thinking OFF (fast sub-agents)
-//   3. "flash/lite" + "think" → thinking ON  (sub-agents needing reasoning)
+// Three routing modes — separate chains, different thinking:
+//   1. "pro" models           → REASONING_CHAIN, thinking ON  (main agents — strongest first)
+//   2. "flash/lite" models    → SUBAGENT_CHAIN,  thinking OFF (fast sub-agents — no pro quota waste)
+//   3. "flash/lite" + "think" → SUBAGENT_CHAIN,  thinking ON  (sub-agents needing reasoning)
 function getModelChain(requestedModel) {
   const m = requestedModel.toLowerCase();
 
   // Flash/lite with thinking (explicit: name contains "think" suffix)
   if ((m.includes("flash") || m.includes("lite")) && m.includes("think")) {
-    return { chain: MODEL_CHAIN, type: "thinking-sub", thinking: true };
+    return { chain: SUBAGENT_CHAIN, type: "thinking-sub", thinking: true };
   }
-  // Pro models → always thinking (main agents)
+  // Pro models → always thinking, full reasoning chain (main agents)
   if (m.includes("pro")) {
-    return { chain: MODEL_CHAIN, type: "thinking-main", thinking: true };
+    return { chain: REASONING_CHAIN, type: "thinking-main", thinking: true };
   }
-  // Flash/lite → no thinking (fast sub-agents)
+  // Flash/lite → no thinking, sub-agent chain (fast sub-agents)
   if (m.includes("flash") || m.includes("lite")) {
-    return { chain: MODEL_CHAIN, type: "fast-sub", thinking: false };
+    return { chain: SUBAGENT_CHAIN, type: "fast-sub", thinking: false };
   }
-  // Default: thinking on
-  return { chain: MODEL_CHAIN, type: "thinking-main", thinking: true };
+  // Default: thinking on, full reasoning chain
+  return { chain: REASONING_CHAIN, type: "thinking-main", thinking: true };
 }
 
 // Retry settings
@@ -322,49 +347,345 @@ async function callLMStudio(messages, systemPrompt, openAiTools = null, stream =
 }
 
 // ============================================================
-// CONTEXT OPTIMIZER (via LM Studio)
+// RESILIENCE UTILITIES
 // ============================================================
-async function optimizeContextWithLocalLLM(contents) {
+function timedOp(name) {
+  const start = Date.now();
+  return {
+    done: (extra = "") => {
+      const ms = Date.now() - start;
+      const tag = ms > 5000 ? "SLOW" : ms > 1000 ? "warn" : "ok";
+      console.log(`[Timer] ${name}: ${ms}ms [${tag}] ${extra}`);
+      return ms;
+    }
+  };
+}
+
+async function withRetry(fn, { name = "operation", maxAttempts = 3, baseDelayMs = 1000 } = {}) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isLast = attempt === maxAttempts;
+      const delay = baseDelayMs * Math.pow(2, attempt - 1) * (0.8 + Math.random() * 0.4);
+      console.warn(`[Retry] ${name} attempt ${attempt}/${maxAttempts} failed: ${err.message}${isLast ? " — giving up" : ` — retrying in ${Math.round(delay)}ms`}`);
+      if (isLast) throw err;
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+
+function logError(subsystem, operation, err, context = {}) {
+  console.error(`[${subsystem}] ${operation} FAILED:`, {
+    error: err.message,
+    code: err.code,
+    ...context,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// ============================================================
+// PGVECTOR (Paired Context Snapshots)
+// ============================================================
+let pgAvailable = false;
+const pool = new Pool({
+  host: PG_HOST,
+  port: PG_PORT,
+  user: PG_USER,
+  password: PG_PASSWORD,
+  database: PG_DATABASE,
+  max: 5,
+  connectionTimeoutMillis: 5000,
+  idleTimeoutMillis: 30000,
+});
+
+pool.on("error", (err) => {
+  console.warn("[pgvector] Pool error:", err.message);
+  pgAvailable = false;
+});
+
+async function initDB() {
   try {
-    if (!(await checkLMStudioHealth())) return contents;
+    await withRetry(async () => {
+      const client = await pool.connect();
+      client.release();
+      pgAvailable = true;
+      console.log("[pgvector] Connected to bridge_context DB");
+    }, { name: "DB connect", maxAttempts: 5, baseDelayMs: 3000 });
+  } catch (err) {
+    logError("pgvector", "initDB", err);
+    pgAvailable = false;
+    // Schedule periodic reconnect attempts
+    setInterval(async () => {
+      if (pgAvailable) return;
+      try {
+        const client = await pool.connect();
+        client.release();
+        pgAvailable = true;
+        console.log("[pgvector] Reconnected to DB");
+      } catch { /* still offline */ }
+    }, 60000);
+  }
+}
 
-    let rawHistory = "";
-    contents.forEach(c => {
-      if (c.parts && c.parts[0] && c.parts[0].text) {
-        rawHistory += `Role: ${c.role}\nContent: ${c.parts[0].text}\n\n`;
-      }
-    });
+async function checkDiskSpace() {
+  if (!pgAvailable) return { dbSizeMB: -1 };
+  try {
+    const result = await pool.query("SELECT pg_database_size(current_database()) as db_size");
+    const dbSizeMB = Math.round(result.rows[0].db_size / 1048576);
+    if (dbSizeMB > 5000) {
+      console.warn(`[Disk] DB size ${dbSizeMB}MB — consider cleanup`);
+    }
+    return { dbSizeMB };
+  } catch { return { dbSizeMB: -1 }; }
+}
 
-    if (rawHistory.length < 2000) return contents;
+async function getSnapshotCount() {
+  if (!pgAvailable) return -1;
+  const result = await pool.query("SELECT count(*) as cnt FROM context_snapshots");
+  return parseInt(result.rows[0].cnt);
+}
 
-    console.log("[Optimizer] Compressing context via LM Studio...");
+async function saveCompressionSnapshot(sessionId, original, compressed, stats) {
+  if (!pgAvailable) return null;
+  try {
+    const result = await withRetry(async () => {
+      return pool.query(
+        `INSERT INTO context_snapshots
+         (session_id, original_message_count, original_token_estimate, original_context,
+          compressed_token_estimate, compressed_context, compression_ratio,
+          compression_latency_ms, model_used, trigger_reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id`,
+        [sessionId, original.messageCount, original.tokenEstimate,
+         JSON.stringify(original.messages.slice(0, 50)), // store first 50 msgs to limit JSONB size
+         stats.compressedTokens, JSON.stringify(compressed),
+         stats.compressedTokens / original.tokenEstimate,
+         stats.latencyMs, stats.model, stats.reason]
+      );
+    }, { name: "snapshot write", maxAttempts: 2, baseDelayMs: 1000 });
+    return result.rows[0].id;
+  } catch (err) {
+    logError("pgvector", "saveCompressionSnapshot", err, { sessionId });
+    return null;
+  }
+}
 
-    const optimizerPrompt = "You are a Context Management AI. Compress this chat history.\n" +
-      "Rules:\n" +
-      "1. Keep the exact intent of the final user message.\n" +
-      "2. Summarize previous turns to retain key facts but remove fluff.\n" +
-      "3. Remove repetitive system logs.\n" +
-      "4. Do NOT answer the user's question. ONLY output the compressed history.\n\n" +
-      "History to compress:\n" + rawHistory.substring(0, 30000);
+async function logCompressionQuality(snapshotId, success, responseTokens, hadToolCalls, error) {
+  if (!pgAvailable || !snapshotId) return;
+  pool.query(
+    `INSERT INTO compression_quality
+     (snapshot_id, model_response_success, model_response_tokens, had_tool_calls, error_occurred)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [snapshotId, success, responseTokens || 0, hadToolCalls || false, !!error]
+  ).catch(() => {}); // fire-and-forget
+}
 
-    const response = await axios.post(LMSTUDIO_ENDPOINT, {
-      messages: [{ role: "user", content: optimizerPrompt }],
-      temperature: 0.1,
-      max_tokens: 2000,
-    }, {
-      headers: { "Authorization": `Bearer ${LMSTUDIO_API_KEY}`, "Content-Type": "application/json" },
-      timeout: LMSTUDIO_COMPRESS_TIMEOUT,
-    });
+async function logOperation(operation, durationMs, success, inputSize, outputSize, error) {
+  if (!pgAvailable) return;
+  pool.query(
+    `INSERT INTO operation_log (operation, duration_ms, success, input_size, output_size, error_message)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [operation, durationMs, success, inputSize, outputSize, error || null]
+  ).catch(() => {}); // fire-and-forget
+}
+
+// ============================================================
+// INTELLIGENT CONTEXT COMPRESSION (10/60/30 Structure)
+// ============================================================
+const compressionCache = new Map();
+const compressionStats = { count: 0, totalRatio: 0, totalLatencyMs: 0, cacheHits: 0, cacheMisses: 0 };
+
+const COMPRESS_SYSTEM_PROMPT = `You are a Context Compression AI for an AI agent orchestration system.
+Your job is to compress conversation history into a structured format that maximizes
+the effectiveness of AI agents that will read this context.
+
+OUTPUT FORMAT (use these exact headers):
+
+## PROJECT DNA
+[What this project/session is about. What's accomplished. Current goals.
+Include: workflow/plan (how we proceed, next phases, step order, dependencies),
+business decisions made (and WHY), programming patterns used,
+technologies and tools in the stack. 3-5 paragraphs.]
+
+## HISTORY
+[Progressive summary: older events get 1 sentence each, recent events get full detail.
+ALWAYS preserve: tool results, errors+fixes, file paths, config values, decisions made.
+Older = shorter. Newer = more detailed.]
+
+## ACTION CONTEXT
+[What needs doing next. Which tools to use. Agent routing hints (thinking vs fast).
+Patterns: what approaches worked/failed. Key blockers or dependencies.
+IMPORTANT: List completed milestones with git commit hashes where available
+(format: "✓ Milestone description — commit abc1234").
+Number pending tasks in priority order.]
+
+RULES:
+- Do NOT answer questions. ONLY compress.
+- Preserve ALL file paths, URLs, config values, error messages, commit hashes verbatim.
+- Preserve business decisions with their reasoning (the "why").
+- Preserve technology choices and programming patterns used.
+- For tool calls: keep tool name + key result, drop verbose output.
+- Recent messages (last 20%) should be barely compressed — keep full details.
+- Old messages (first 30%) can be aggressively summarized.
+- Git commit hashes: extract any mentioned commit hashes and associate them with
+  the milestone/task they completed. List them in ACTION CONTEXT.
+- Total output MUST be shorter than input by at least 60%.`;
+
+function estimateTokens(messages) {
+  return Math.round(JSON.stringify(messages).length / 4);
+}
+
+function getSessionFingerprint(messages, systemPrompt) {
+  const firstUser = messages.find(m => m.role === "user");
+  const key = (firstUser?.content || "").substring(0, 200) + "||" + (systemPrompt || "").substring(0, 200);
+  return crypto.createHash("sha256").update(key).digest("hex").substring(0, 16);
+}
+
+function cleanCompressionCache() {
+  const now = Date.now();
+  for (const [key, entry] of compressionCache) {
+    if (now - entry.timestamp > COMPRESS_CACHE_TTL) {
+      compressionCache.delete(key);
+    }
+  }
+  // Enforce max size
+  while (compressionCache.size > COMPRESS_CACHE_MAX) {
+    const oldest = compressionCache.keys().next().value;
+    compressionCache.delete(oldest);
+  }
+}
+
+async function compressContext(messages, systemPrompt) {
+  const tokens = estimateTokens(messages);
+  if (tokens < COMPRESS_THRESHOLD) {
+    return { messages, sessionId: null, compressed: false };
+  }
+
+  const sessionId = getSessionFingerprint(messages, systemPrompt);
+
+  // Check compression cache — if same session with few new messages, reuse + append
+  const cached = compressionCache.get(sessionId);
+  if (cached && messages.length - cached.fullMessageCount <= 10) {
+    compressionStats.cacheHits++;
+    const newMessages = messages.slice(cached.fullMessageCount);
+    const combined = [...cached.compressedMessages, ...newMessages];
+    const combinedTokens = estimateTokens(combined);
+    if (combinedTokens < COMPRESS_THRESHOLD) {
+      console.log(`[Compress] Cache HIT: reusing compressed context + ${newMessages.length} new msgs (${combinedTokens} tokens)`);
+      return { messages: combined, sessionId, compressed: true, fromCache: true };
+    }
+    // Cache stale — too many new messages accumulated, re-compress
+  }
+  compressionStats.cacheMisses++;
+
+  // Check LM Studio health
+  if (!(await checkLMStudioHealth())) {
+    console.warn("[Compress] LM Studio offline — skipping compression");
+    return { messages, sessionId, compressed: false };
+  }
+
+  const estimatedDuration = Math.round(tokens / COMPRESS_ESTIMATED_SPEED);
+  console.log(`[Compress] Starting compression: ${tokens} tokens, ${messages.length} msgs, est. ${estimatedDuration}s`);
+  const timer = timedOp("LMStudio compress");
+
+  try {
+    // Build the history text for compression
+    let historyText = "";
+    for (const msg of messages) {
+      const content = typeof msg.content === "string" ? msg.content
+        : Array.isArray(msg.content) ? msg.content.map(c => typeof c === "string" ? c : (c.text || "")).join(" ")
+        : JSON.stringify(msg.content);
+      historyText += `[${msg.role}]: ${content}\n\n`;
+    }
+
+    // Truncate to fit LM Studio context — send up to ~120K chars (~30K tokens)
+    const maxHistoryChars = 120000;
+    let truncatedHistory = historyText;
+    if (historyText.length > maxHistoryChars) {
+      // Keep first 20% and last 60% to preserve recent context
+      const headSize = Math.round(maxHistoryChars * 0.2);
+      const tailSize = Math.round(maxHistoryChars * 0.6);
+      truncatedHistory = historyText.substring(0, headSize)
+        + `\n\n... [${historyText.length - headSize - tailSize} chars omitted] ...\n\n`
+        + historyText.substring(historyText.length - tailSize);
+    }
+
+    const compressionPrompt = `Compress the following conversation (${messages.length} messages, ~${tokens} tokens) into the structured format. Target output: ~${Math.round(COMPRESS_TARGET * 4)} characters.\n\n` + truncatedHistory;
+
+    const response = await withRetry(async () => {
+      return axios.post(LMSTUDIO_ENDPOINT, {
+        messages: [
+          { role: "system", content: COMPRESS_SYSTEM_PROMPT },
+          { role: "user", content: compressionPrompt },
+        ],
+        temperature: 0.1,
+        max_tokens: 8192,
+        stream: false,
+      }, {
+        headers: { "Authorization": `Bearer ${LMSTUDIO_API_KEY}`, "Content-Type": "application/json" },
+        timeout: COMPRESS_TIMEOUT,
+      });
+    }, { name: "LMStudio compress", maxAttempts: 2, baseDelayMs: 2000 });
+
+    const latencyMs = timer.done(`${tokens}→${estimateTokens([{ content: response.data.choices[0].message.content }])} tokens`);
 
     const compressedText = response.data.choices[0].message.content;
-    console.log("[Optimizer] Context compressed successfully.");
-    return [
-      { role: "user", parts: [{ text: "Previous Context Summary:\n" + compressedText }] },
-      contents[contents.length - 1],
+    if (!compressedText || compressedText.length < 100) {
+      console.warn("[Compress] LM Studio returned empty/tiny response — using original");
+      return { messages, sessionId, compressed: false };
+    }
+
+    // Determine how many recent messages to keep uncompressed (last 20%, up to 30)
+    const recentCount = Math.min(30, Math.max(5, Math.round(messages.length * 0.2)));
+    const recentMessages = messages.slice(-recentCount);
+
+    // Reconstruct compressed message array
+    const compressedMessages = [
+      { role: "user", content: `[Compressed Context — ${messages.length - recentCount} earlier messages]\n\n${compressedText}` },
+      { role: "assistant", content: "Understood. I have the compressed context with project DNA, history, and action items. Continuing with the recent messages below." },
+      ...recentMessages,
     ];
-  } catch (error) {
-    console.warn("[Optimizer] Failed, using original context.", error.message);
-    return contents;
+
+    const compressedTokens = estimateTokens(compressedMessages);
+    const ratio = compressedTokens / tokens;
+
+    // Update stats
+    compressionStats.count++;
+    compressionStats.totalRatio += ratio;
+    compressionStats.totalLatencyMs += latencyMs;
+
+    console.log(`[Compress] Done: ${tokens} → ${compressedTokens} tokens (${(ratio * 100).toFixed(1)}% of original, ${latencyMs}ms)`);
+
+    // Cache the result
+    compressionCache.set(sessionId, {
+      compressedMessages,
+      fullMessageCount: messages.length,
+      timestamp: Date.now(),
+    });
+    cleanCompressionCache();
+
+    // Save paired snapshot to pgvector (async — don't block response)
+    saveCompressionSnapshot(sessionId, {
+      messageCount: messages.length,
+      tokenEstimate: tokens,
+      messages,
+    }, compressedMessages, {
+      compressedTokens,
+      latencyMs,
+      model: "lmstudio-qwen-30b",
+      reason: `tokens ${tokens} > threshold ${COMPRESS_THRESHOLD}`,
+    }).then(id => {
+      if (id) logOperation("compress", latencyMs, true, tokens, compressedTokens, null);
+    }).catch(() => {});
+
+    return { messages: compressedMessages, sessionId, compressed: true, snapshotId: null };
+  } catch (err) {
+    const latencyMs = timer.done("FAILED");
+    logError("Compress", "LM Studio call", err, { tokenCount: tokens });
+    logOperation("compress", latencyMs, false, tokens, 0, err.message).catch(() => {});
+    // Graceful degradation — return original messages
+    return { messages, sessionId, compressed: false };
   }
 }
 
@@ -654,18 +975,44 @@ app.use((req, res, next) => {
 // ============================================================
 app.get("/health", async (req, res) => {
   const lmOk = await checkLMStudioHealth();
+  const avgRatio = compressionStats.count > 0 ? (compressionStats.totalRatio / compressionStats.count * 100).toFixed(1) + "%" : "N/A";
+  const avgLatency = compressionStats.count > 0 ? Math.round(compressionStats.totalLatencyMs / compressionStats.count) : 0;
   res.json({
     status: "ok",
+    uptime: Math.round(process.uptime()),
     cache: cache.stats(),
     rateLimit: getRateStatus(),
     lmstudio: { available: lmOk, endpoint: LMSTUDIO_ENDPOINT },
     geminiOAuth: { endpoint: CODE_ASSIST_ENDPOINT },
     modelChain: MODEL_CHAIN,
     thinkingBudget: DEFAULT_THINKING_BUDGET,
+    compression: {
+      threshold: COMPRESS_THRESHOLD,
+      target: COMPRESS_TARGET,
+      cacheSize: compressionCache.size,
+      stats: {
+        count: compressionStats.count,
+        avgRatio,
+        avgLatencyMs: avgLatency,
+        cacheHits: compressionStats.cacheHits,
+        cacheMisses: compressionStats.cacheMisses,
+      },
+    },
+    pgvector: {
+      available: pgAvailable,
+      snapshotCount: await getSnapshotCount().catch(() => -1),
+      dbSizeMB: (await checkDiskSpace()).dbSizeMB,
+    },
+    subsystems: {
+      geminiOAuth: "ok",
+      lmstudio: lmOk ? "ok" : "offline",
+      pgvector: pgAvailable ? "ok" : "offline",
+      compressionCache: compressionCache.size > 0 ? "warm" : "cold",
+    },
     tiers: [
-      "1: Main agent (thinking ON):  " + MODEL_CHAIN.join(" → "),
-      "2: Sub-agent (thinking OFF):  " + MODEL_CHAIN.join(" → "),
-      "3: Sub-agent (thinking ON):   " + MODEL_CHAIN.join(" → "),
+      "1: Main agent (thinking ON):  " + REASONING_CHAIN.join(" → "),
+      "2: Sub-agent (thinking OFF):  " + SUBAGENT_CHAIN.join(" → "),
+      "3: Sub-agent (thinking ON):   " + SUBAGENT_CHAIN.join(" → "),
       "4: LM Studio Qwen 30B (unlimited, with tools) [simple queries + fallback]",
     ],
   });
@@ -699,10 +1046,26 @@ app.post("/v1/chat/completions", async (req, res) => {
   }
 
   try {
+    // ---- Step 0: Intelligent Context Compression ----
+    const originalTokens = estimateTokens(filteredMessages);
+    let workingMessages = filteredMessages;
+    let compressionSessionId = null;
+    let compressionSnapshotId = null;
+
+    if (originalTokens > COMPRESS_THRESHOLD) {
+      console.log(`[Compress] ${originalTokens} tokens > ${COMPRESS_THRESHOLD} threshold — compressing`);
+      const compResult = await compressContext(filteredMessages, systemInstruction);
+      workingMessages = compResult.messages;
+      compressionSessionId = compResult.sessionId;
+      if (compResult.compressed) {
+        console.log(`[Compress] ${originalTokens} -> ${estimateTokens(workingMessages)} tokens`);
+      }
+    }
+
     // ---- Step 1: Check cache ----
     // Cache check works for ALL requests (including those with tools,
     // keyed on messages only — tools don't change the answer for same input)
-    const cached = cache.get(model, filteredMessages);
+    const cached = cache.get(model, workingMessages);
     if (cached) {
       const taggedResp = { ...cached, _source: "cache:" + (cached._source || "unknown") };
       return sendResponse(res, taggedResp, isStream, model);
@@ -719,7 +1082,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     if (!response && tier === "simple" && !hasTools && lmAvailable) {
       console.log("[Router] SIMPLE -> LM Studio");
       try {
-        const lmResp = await callLMStudio(filteredMessages, systemInstruction, openAiTools);
+        const lmResp = await callLMStudio(workingMessages, systemInstruction, openAiTools);
         response = formatLMStudioAsOpenAI(lmResp, model);
       } catch (err) {
         console.warn("[Router] LM Studio failed for simple request.", err.message, err.response?.data ? JSON.stringify(err.response.data).substring(0, 300) : "");
@@ -731,7 +1094,7 @@ app.post("/v1/chat/completions", async (req, res) => {
         (rate.level === "soft" || rate.level === "hard" || rate.level === "blocked")) {
       console.log(`[Router] STANDARD + rate=${rate.level} + no tools -> LM Studio`);
       try {
-        const lmResp = await callLMStudio(filteredMessages, systemInstruction, openAiTools);
+        const lmResp = await callLMStudio(workingMessages, systemInstruction, openAiTools);
         response = formatLMStudioAsOpenAI(lmResp, model);
       } catch (err) {
         console.warn("[Router] LM Studio failed.", err.message, err.response?.data ? JSON.stringify(err.response.data).substring(0, 300) : "");
@@ -741,7 +1104,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     // ---- Step 3: Gemini OAuth (primary) with retry + model fallback ----
     if (!response && rate.level === "ok") {
       console.log("[Router] -> Gemini OAuth");
-      const contents = transformInputToContents(filteredMessages);
+      const contents = transformInputToContents(workingMessages);
       const geminiResult = await callGeminiWithRetry(contents, model, tools, systemInstruction);
 
       if (geminiResult === null) {
@@ -756,7 +1119,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     if (!response && lmAvailable) {
       console.log("[Router] -> LM Studio (fallback)");
       try {
-        const lmResp = await callLMStudio(filteredMessages, systemInstruction, openAiTools);
+        const lmResp = await callLMStudio(workingMessages, systemInstruction, openAiTools);
         response = formatLMStudioAsOpenAI(lmResp, model);
       } catch (err) {
         console.warn("[Router] LM Studio failed.", err.message, err.response?.data ? JSON.stringify(err.response.data).substring(0, 300) : "");
@@ -775,10 +1138,19 @@ app.post("/v1/chat/completions", async (req, res) => {
       const msg = response.choices?.[0]?.message;
       const hasToolCalls = msg?.tool_calls && msg.tool_calls.length > 0;
       if (!hasToolCalls) {
-        cache.set(model, filteredMessages, response, response._source || "unknown");
+        cache.set(model, workingMessages, response, response._source || "unknown");
       } else {
         console.log("[Cache] Skipping cache for tool_call response");
       }
+    }
+
+    // ---- Log compression quality (async) ----
+    if (compressionSessionId) {
+      const respMsg = response?.choices?.[0]?.message;
+      const responseTokens = response?.usage?.total_tokens || 0;
+      const hadToolCalls = !!(respMsg?.tool_calls && respMsg.tool_calls.length > 0);
+      logCompressionQuality(compressionSnapshotId, !!response, responseTokens, hadToolCalls, null)
+        .catch(e => console.warn("[Quality] Log failed:", e.message));
     }
 
     // ---- Step 5: Send ----
@@ -830,22 +1202,59 @@ function sendResponse(res, response, isStream, model) {
 }
 
 // ============================================================
+// GRACEFUL SHUTDOWN
+// ============================================================
+async function gracefulShutdown(signal) {
+  console.log(`[Shutdown] ${signal} received, closing connections...`);
+  try {
+    await Promise.race([
+      pool.end(),
+      new Promise(r => setTimeout(r, 5000))
+    ]);
+    console.log("[Shutdown] DB pool closed");
+  } catch (err) {
+    console.warn("[Shutdown] DB pool close error:", err.message);
+  }
+  console.log("[Shutdown] Clean exit");
+  process.exit(0);
+}
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+
+// ============================================================
 // START
 // ============================================================
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log("");
-  console.log("=== Gemini Bridge (OAuth + LM Studio) ===");
+  console.log("=== Gemini Bridge (OAuth + LM Studio + Compression) ===");
   console.log("Port: " + PORT);
   console.log("Tier 1: OAuth Cloud Code Assist — " + CODE_ASSIST_ENDPOINT);
-  console.log("  Model chain: " + MODEL_CHAIN.join(" → "));
-  console.log("  Main agent:  thinking ON  | Sub-agent: thinking OFF | Sub-thinking: thinking ON");
+  console.log("  Reasoning: " + REASONING_CHAIN.join(" → "));
+  console.log("  SubAgent:  " + SUBAGENT_CHAIN.join(" → "));
+  console.log("  Main agent: thinking ON (REASONING) | Sub-agent: thinking OFF (SUBAGENT) | Sub-thinking: thinking ON (SUBAGENT)");
   console.log("  Thinking: " + DEFAULT_THINKING_BUDGET + " tokens (2.5), HIGH level (3.x)");
   console.log("  Retry: Phase 1 (try all) + Phase 2 (wait+retry)");
   console.log("  User-Agent: GeminiCLI/" + GEMINI_CLI_VERSION);
   console.log("Tier 2: LM Studio (Qwen 30B) — " + LMSTUDIO_ENDPOINT);
+  console.log("Compression: threshold=" + COMPRESS_THRESHOLD + " target=" + COMPRESS_TARGET);
   console.log("Cache: " + CACHE_MAX_SIZE + " entries, " + (CACHE_TTL_MS / 1000) + "s TTL");
   console.log("No API keys — OAuth only.");
-  console.log("=========================================");
+  console.log("=========================================================");
   console.log("");
-  checkLMStudioHealth().then(ok => console.log("[Startup] LM Studio: " + (ok ? "ONLINE" : "OFFLINE")));
+
+  // Initialize subsystems
+  const lmOk = await checkLMStudioHealth();
+  console.log("[Startup] LM Studio: " + (lmOk ? "ONLINE" : "OFFLINE"));
+
+  await initDB();
+  console.log("[Startup] pgvector: " + (pgAvailable ? "ONLINE" : "OFFLINE"));
+
+  const startupState = {
+    timestamp: new Date().toISOString(),
+    nodeVersion: process.version,
+    lmstudio: lmOk,
+    pgvector: pgAvailable,
+    compressionThreshold: COMPRESS_THRESHOLD,
+  };
+  console.log("[Startup] State:", JSON.stringify(startupState));
 });

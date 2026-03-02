@@ -26,6 +26,30 @@ mcporter call mem0.add_memories text="important fact to remember"
 **ALWAYS search mem0** before answering questions about Mike, his preferences, family, or past context.
 **ALWAYS save to mem0** after learning new facts worth remembering.
 
+## Sub-Agent Model Selection
+When spawning sub-agents via `sessions_spawn`, you can override the model with the `model` parameter.
+
+### Available models for sub-agents
+| Alias | Model | When to use |
+|-------|-------|-------------|
+| *(default)* | `gemini-bridge/gemini-3-flash-preview` | Most tasks — fast, no thinking |
+| `think` | `gemini-bridge/gemini-3-flash-thinking` | Complex analysis, reasoning, multi-step logic |
+| `lite` | `gemini-bridge/gemini-2.5-flash-lite` | Trivial tasks — summaries, formatting, simple lookups |
+
+### Examples
+```
+sessions_spawn({ task: "summarize this document", runtime: "subagent" })
+  → uses default flash (fast, no thinking)
+
+sessions_spawn({ task: "analyze code architecture and propose refactoring", model: "gemini-bridge/gemini-3-flash-thinking", runtime: "subagent" })
+  → uses flash with thinking ON (for complex reasoning)
+
+sessions_spawn({ task: "format this list as a table", model: "gemini-bridge/gemini-2.5-flash-lite", runtime: "subagent" })
+  → uses lightest model (saves quota)
+```
+
+**Rule of thumb:** skip `model` parameter for most tasks (default flash is fine). Only override for complex reasoning (`think`) or trivial formatting (`lite`).
+
 ## SSH Hosts (Passwordless Access)
 All hosts have passwordless SSH configured. Use exec tool to run commands.
 

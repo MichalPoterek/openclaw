@@ -4,3 +4,16 @@ __pycache__/
 *.pyc
 .idea/
 .claude/
+
+# Real config with secrets (use openclaw.json.template)
+openclaw.json
+
+# Temp/debug files
+bridge.b64
+chrome_debug_output_*.txt
+chrome_logs_*.txt
+*.b64
+
+# Old index.cjs versions
+index.cjs.v*
+gemini-bridge-index.js

@@ -1,0 +1,26 @@
+[Unit]
+Description=vLLM Qwen 32B Turbo (300+ t/s target)
+After=network.target nvidia-persistenced.service
+
+[Service]
+Type=simple
+User=mike
+Group=mike
+WorkingDirectory=/home/mike
+Environment="PATH=/home/mike/vllm_env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="HF_HOME=/home/mike/.cache/huggingface"
+ExecStart=/home/mike/vllm_env/bin/python3 -m vllm.entrypoints.openai.api_server \
+    --model /home/mike/models/Qwen2.5-Coder-32B-Instruct-AWQ \
+    --port 8000 \
+    --host 0.0.0.0 \
+    --gpu-memory-utilization 0.90 \
+    --max-model-len 32768 \
+    --tensor-parallel-size 2 \
+    --disable-custom-all-reduce \
+    --api-key ${VLLM_API_KEY} \
+    --served-model-name Qwen-32B-Turbo
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

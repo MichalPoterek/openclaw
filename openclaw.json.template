@@ -1,32 +1,90 @@
 {
+  "meta": {
+    "lastTouchedVersion": "2026.2.25",
+    "lastTouchedAt": "2026-02-28T07:59:43.286Z"
+  },
+  "wizard": {
+    "lastRunAt": "2026-02-23T16:05:17.708Z",
+    "lastRunVersion": "2026.2.22-2",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
+  },
   "ui": {
     "assistant": {
       "name": "PA"
     }
   },
+  "auth": {
+    "profiles": {
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "api_key"
+      }
+    }
+  },
   "models": {
     "providers": {
       "gemini-bridge": {
-        "baseUrl": "http://172.16.192.94:3458/v1",
-        "apiKey": "gemini-oauth-bridge-key-12345",
+        "baseUrl": "http://YOUR_VM_IP:3458/v1",
+        "apiKey": "YOUR_BRIDGE_API_KEY",
         "auth": "api-key",
-        "api": "openai-completions",
         "models": [
           {
             "id": "gemini-3.1-pro-preview",
-            "name": "Gemini 3.1 Pro (Bridge)",
+            "name": "Gemini 3.1 Pro (Reasoning)",
             "input": ["text", "image"],
-            "contextWindow": 2000000,
-            "maxTokens": 65536,
-            "reasoning": true
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "gemini-3-flash-preview",
+            "name": "Gemini 3 Flash (Sub-agent)",
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "gemini-3-flash-thinking",
+            "name": "Gemini 3 Flash Thinking (Sub-agent+Reasoning)",
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "gemini-2.5-pro",
+            "name": "Gemini 2.5 Pro (Fallback Reasoning)",
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
           },
           {
             "id": "gemini-2.5-flash",
-            "name": "Gemini 2.5 Flash (Bridge)",
+            "name": "Gemini 2.5 Flash (Fallback Fast)",
             "input": ["text", "image"],
             "contextWindow": 1000000,
-            "maxTokens": 65536,
-            "reasoning": true
+            "maxTokens": 8192
+          },
+          {
+            "id": "gemini-2.5-flash-lite",
+            "name": "Gemini 2.5 Flash Lite (Lightest)",
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          }
+        ],
+        "api": "openai-completions"
+      },
+      "google": {
+        "api": "google-generative-ai",
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "apiKey": "YOUR_GOOGLE_API_KEY",
+        "models": [
+          {
+            "id": "gemini-2.0-flash",
+            "name": "Gemini 2.0 Flash",
+            "contextWindow": 1048576,
+            "maxTokens": 8192,
+            "input": ["text", "image"]
           }
         ]
       }
@@ -36,21 +94,63 @@
     "defaults": {
       "model": {
         "primary": "gemini-bridge/gemini-3.1-pro-preview",
-        "fallbacks": ["gemini-bridge/gemini-2.5-flash"]
+        "fallbacks": [
+          "gemini-bridge/gemini-2.5-pro",
+          "gemini-bridge/gemini-2.5-flash"
+        ]
+      },
+      "models": {
+        "gemini-bridge/gemini-3-flash-preview": {
+          "alias": "flash"
+        },
+        "gemini-bridge/gemini-2.5-flash-lite": {
+          "alias": "lite"
+        },
+        "gemini-bridge/gemini-3-flash-thinking": {
+          "alias": "think"
+        }
       },
       "workspace": "/home/mike/.openclaw/workspace",
-      "contextTokens": 150000,
-      "dmScope": "per-channel-peer"
+      "contextTokens": 950000,
+      "memorySearch": {
+        "provider": "gemini",
+        "model": "gemini-embedding-001"
+      },
+      "compaction": {
+        "mode": "safeguard",
+        "reserveTokensFloor": 50000,
+        "maxHistoryShare": 0.85,
+        "memoryFlush": {
+          "enabled": true,
+          "softThresholdTokens": 800000
+        }
+      },
+      "typingMode": "never",
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8,
+        "model": {
+          "primary": "gemini-bridge/gemini-3-flash-preview",
+          "fallbacks": [
+            "gemini-bridge/gemini-2.5-flash"
+          ]
+        },
+        "thinking": "off"
+      }
     }
   },
   "messages": {
-    "responsePrefix": "[PA] \u26a1 ",
+    "responsePrefix": "[PA] ⚡ ",
     "ackReactionScope": "group-mentions"
   },
   "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
     "ownerAllowFrom": [
-      48509879642
-    ]
+      YOUR_PHONE_NUMBER_WITHOUT_PLUS
+    ],
+    "ownerDisplay": "raw"
   },
   "session": {
     "dmScope": "per-channel-peer",
@@ -60,7 +160,7 @@
         {
           "action": "allow",
           "match": {
-            "keyPrefix": "agent:main:whatsapp:direct:+48509879642"
+            "keyPrefix": "agent:main:whatsapp:direct:+YOUR_PHONE_NUMBER"
           }
         },
         {
@@ -72,13 +172,33 @@
       ]
     }
   },
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "boot-md": {
+          "enabled": true
+        },
+        "command-logger": {
+          "enabled": true
+        },
+        "session-memory": {
+          "enabled": true
+        }
+      }
+    }
+  },
   "channels": {
     "whatsapp": {
       "enabled": true,
       "dmPolicy": "open",
       "selfChatMode": true,
-      "allowFrom": ["*"],
+      "allowFrom": [
+        "*"
+      ],
       "groupPolicy": "allowlist",
+      "debounceMs": 0,
+      "mediaMaxMb": 500,
       "accounts": {
         "default": {}
       }
@@ -88,9 +208,54 @@
     "port": 18789,
     "mode": "local",
     "bind": "lan",
+    "controlUi": {
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789",
+        "http://YOUR_VM_IP:18789",
+        "https://YOUR_VM_IP:18790",
+        "http://YOUR_HOSTNAME:18789"
+      ],
+      "dangerouslyAllowHostHeaderOriginFallback": true
+    },
     "auth": {
       "mode": "token",
-      "token": "YOUR_GATEWAY_TOKEN_HERE"
+      "token": "YOUR_GATEWAY_AUTH_TOKEN",
+      "trustedProxy": {
+        "userHeader": "Remote-User",
+        "allowUsers": [
+          "mike"
+        ]
+      }
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  },
+  "skills": {
+    "install": {
+      "nodeManager": "npm"
+    },
+    "entries": {
+      "goplaces": {
+        "apiKey": "YOUR_GOPLACES_API_KEY"
+      },
+      "local-places": {
+        "apiKey": "YOUR_LOCAL_PLACES_API_KEY"
+      },
+      "nano-banana-pro": {
+        "apiKey": "YOUR_NANO_BANANA_API_KEY"
+      },
+      "openai-image-gen": {
+        "apiKey": "YOUR_OPENAI_API_KEY"
+      },
+      "openai-whisper-api": {
+        "apiKey": "YOUR_OPENAI_API_KEY"
+      },
+      "sag": {
+        "apiKey": "YOUR_SAG_API_KEY"
+      }
     }
   },
   "plugins": {

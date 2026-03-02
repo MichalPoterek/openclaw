@@ -1,0 +1,38 @@
+services:
+  bridge:
+    build: .
+    ports:
+      - "3458:3458"
+    env_file: .env
+    volumes:
+      - /home/mike/.gemini:/home/mike/.gemini:ro
+    depends_on:
+      bridge-db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3458/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  bridge-db:
+    image: ankane/pgvector:latest
+    environment:
+      POSTGRES_USER: bridge
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: bridge_context
+    volumes:
+      - bridge-pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bridge -d bridge_context"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  bridge-pgdata:
