@@ -29,8 +29,8 @@ const LMSTUDIO_TIMEOUT = 120000;
 const LMSTUDIO_COMPRESS_TIMEOUT = 60000;
 
 // Intelligent context compression
-const COMPRESS_THRESHOLD = 300000;  // ~300K tokens — start compressing
-const COMPRESS_TARGET    = 150000;  // compress DOWN to ~150K tokens
+const COMPRESS_THRESHOLD = 800000;  // ~800K tokens — start compressing
+const COMPRESS_TARGET    = 400000;  // compress DOWN to ~400K tokens
 const COMPRESS_CACHE_MAX = 50;      // max cached compression sessions
 const COMPRESS_CACHE_TTL = 30 * 60 * 1000; // 30 min
 const COMPRESS_TIMEOUT   = 60000;   // 60s max for LM Studio compression call
@@ -150,17 +150,17 @@ class LRUCache {
     this.misses = 0;
   }
 
-  _hash(model, messages) {
+  _hash(model, messages, clientId = "default") {
     const tail = messages.slice(-CACHE_KEY_MESSAGES);
     const content = tail.map(m => {
       const c = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
       return `${m.role}:${c}`;
     }).join("|");
-    return crypto.createHash("sha256").update(`${model}||${content}`).digest("hex");
+    return crypto.createHash("sha256").update(`${clientId}||${model}||${content}`).digest("hex");
   }
 
-  get(model, messages) {
-    const key = this._hash(model, messages);
+  get(model, messages, clientId) {
+    const key = this._hash(model, messages, clientId);
     const entry = this.map.get(key);
     if (!entry) { this.misses++; return null; }
     if (Date.now() - entry.timestamp > this.ttlMs) {
@@ -172,12 +172,12 @@ class LRUCache {
     this.map.delete(key);
     this.map.set(key, entry);
     this.hits++;
-    console.log(`[Cache HIT] key=${key.substring(0, 12)}... source=${entry.source} age=${Math.round((Date.now() - entry.timestamp) / 1000)}s`);
+    console.log(`[Cache HIT] key=${key.substring(0, 12)}... client=${clientId} source=${entry.source} age=${Math.round((Date.now() - entry.timestamp) / 1000)}s`);
     return entry.response;
   }
 
-  set(model, messages, response, source) {
-    const key = this._hash(model, messages);
+  set(model, messages, response, source, clientId) {
+    const key = this._hash(model, messages, clientId);
     if (this.map.size >= this.maxSize) {
       const oldest = this.map.keys().next().value;
       this.map.delete(oldest);
@@ -1024,6 +1024,11 @@ app.post("/v1/chat/completions", async (req, res) => {
     || req.query.key;
   if (providedKey !== BRIDGE_API_KEY) return res.status(401).json({ error: "Unauthorized" });
 
+  // Identify client for cache isolation
+  const clientId = req.headers["x-client-id"]
+    || (req.headers["user-agent"] || "").split("/")[0]
+    || "unknown";
+
   const model = req.body.model || "gemini-2.5-flash";
   const messages = req.body.messages || [];
   const isStream = req.body.stream === true;
@@ -1065,7 +1070,7 @@ app.post("/v1/chat/completions", async (req, res) => {
     // ---- Step 1: Check cache ----
     // Cache check works for ALL requests (including those with tools,
     // keyed on messages only — tools don't change the answer for same input)
-    const cached = cache.get(model, workingMessages);
+    const cached = cache.get(model, workingMessages, clientId);
     if (cached) {
       const taggedResp = { ...cached, _source: "cache:" + (cached._source || "unknown") };
       return sendResponse(res, taggedResp, isStream, model);
@@ -1138,7 +1143,7 @@ app.post("/v1/chat/completions", async (req, res) => {
       const msg = response.choices?.[0]?.message;
       const hasToolCalls = msg?.tool_calls && msg.tool_calls.length > 0;
       if (!hasToolCalls) {
-        cache.set(model, workingMessages, response, response._source || "unknown");
+        cache.set(model, workingMessages, response, response._source || "unknown", clientId);
       } else {
         console.log("[Cache] Skipping cache for tool_call response");
       }
