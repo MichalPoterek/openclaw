@@ -340,6 +340,76 @@ Returns:
 - `cache` — LRU cache size, hit rate, per-source breakdown
 - `rateLimit` — current request rate
 
+## pgvector — Paired Context Snapshots
+
+Every compression event stores a **paired snapshot** in PostgreSQL: the full original context and the compressed output side by side. This creates a growing dataset for analysis and optimization.
+
+### What Gets Stored
+
+**`context_snapshots`** — one row per compression event:
+
+| Column | Content |
+|--------|---------|
+| `original_context` | Full conversation history as JSONB (before compression) |
+| `original_token_estimate` | Token count of original context |
+| `original_message_count` | Number of messages in original |
+| `compressed_context` | Compressed 10/60/30 output as JSONB (after compression) |
+| `compressed_token_estimate` | Token count after compression |
+| `compression_ratio` | Ratio (e.g., 0.5 = compressed to 50% of original) |
+| `compression_latency_ms` | How long LM Studio took to compress |
+| `model_used` | Which model performed the compression |
+| `embedding` | vector(768) for semantic search (future use) |
+
+**`compression_quality`** — feedback per snapshot:
+
+| Column | Content |
+|--------|---------|
+| `model_response_success` | Did the model respond correctly after receiving compressed context? |
+| `model_response_tokens` | Response token count |
+| `had_tool_calls` | Whether the response included tool calls |
+| `error_occurred` | Whether an error happened |
+| `response_latency_ms` | Response latency |
+
+**`operation_log`** — timing for all bridge operations (auto-cleaned after 7 days).
+
+### Auto-Cleanup
+
+- Max **200 snapshots per session** (oldest deleted via trigger)
+- Operation log kept for **7 days** only
+
+### Querying Snapshots
+
+```bash
+# Recent compression events
+PGPASSWORD=your-password psql -h 127.0.0.1 -p 5433 -U bridge -d bridge_context \
+  -c "SELECT id, session_id, original_token_estimate, compressed_token_estimate,
+      compression_ratio, compression_latency_ms
+      FROM context_snapshots ORDER BY id DESC LIMIT 10;"
+
+# Average compression quality
+PGPASSWORD=your-password psql -h 127.0.0.1 -p 5433 -U bridge -d bridge_context \
+  -c "SELECT avg(compression_ratio)::numeric(4,2) as avg_ratio,
+      avg(compression_latency_ms)::int as avg_latency_ms,
+      count(*) as total FROM context_snapshots;"
+
+# Compare original vs compressed for a specific snapshot
+PGPASSWORD=your-password psql -h 127.0.0.1 -p 5433 -U bridge -d bridge_context \
+  -c "SELECT original_message_count, original_token_estimate,
+      compressed_token_estimate, compression_ratio
+      FROM context_snapshots WHERE id = 1;"
+```
+
+### Future: MCP Tools for Direct Model Access
+
+Planned: an MCP server that exposes pgvector snapshots as tools, allowing AI agents (Agent Zero, OpenClaw, Gemini CLI) to directly query compression history from within their conversations:
+
+- **`search_compression_history`** — semantic search across past compressed contexts (via pgvector embeddings)
+- **`get_snapshot`** — retrieve a specific paired snapshot (original + compressed) by ID or session
+- **`compression_stats`** — aggregated statistics (avg ratio, latency trends, quality scores)
+- **`recall_project_context`** — retrieve the most recent Project DNA / Action Context blocks for a session, enabling agents to "remember" past sessions even after restart
+
+This will close the loop: agents can learn from their own compression history and recover context that was previously compressed away.
+
 ## Troubleshooting
 
 ### OAuth token expired / 401 from Gemini
