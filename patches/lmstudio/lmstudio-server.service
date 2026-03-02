@@ -1,0 +1,19 @@
+[Unit]
+Description=LM Studio HTTP Server + Model Loading
+After=network.target lmstudio.service
+Requires=lmstudio.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Wait for LM Studio internal API to be ready (up to 60s)
+ExecStartPre=/usr/bin/bash -c "for i in $(seq 1 30); do /home/mike/.lmstudio/bin/lms ps >/dev/null 2>&1 && exit 0; sleep 2; done; echo LM Studio not ready after 60s; exit 1"
+# Start HTTP server on all interfaces
+ExecStart=/home/mike/.lmstudio/bin/lms server start --port 1234 --cors --bind 0.0.0.0
+# Load embedding model (small, fast)
+ExecStartPost=/usr/bin/bash -c "sleep 3 && /home/mike/.lmstudio/bin/lms load text-embedding-nomic-embed-text-v1.5@q8_0 2>&1 || true"
+# Qwen 30B loads via JIT on first request — explicit load sometimes fails
+ExecStop=/home/mike/.lmstudio/bin/lms server stop
+
+[Install]
+WantedBy=default.target

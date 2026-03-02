@@ -1,0 +1,41 @@
+services:
+  mem0_store:
+    image: qdrant/qdrant
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - mem0_storage:/mem0/storage
+    restart: unless-stopped
+  openmemory-mcp:
+    image: mem0/openmemory-mcp
+    build: api/
+    environment:
+      - USER
+      - API_KEY
+    env_file:
+      - api/.env
+    depends_on:
+      - mem0_store
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./api:/usr/src/openmemory
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    command: >
+      sh -c "uvicorn main:app --host 0.0.0.0 --port 8765 --reload --workers 4 --proxy-headers --forwarded-allow-ips='*'"
+  openmemory-ui:
+    build:
+      context: ui/
+      dockerfile: Dockerfile
+    image: mem0/openmemory-ui:latest
+    ports:
+      - "127.0.0.1:3004:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_USER_ID=${USER}
+    restart: unless-stopped
+
+volumes:
+  mem0_storage:

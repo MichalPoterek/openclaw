@@ -1,0 +1,14 @@
+[Unit]
+Description=LM Studio Application (headless)
+After=network.target xvfb.service
+Requires=xvfb.service
+
+[Service]
+Type=simple
+Environment=DISPLAY=:99
+ExecStart=/home/mike/LM-Studio.AppImage --no-sandbox
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
